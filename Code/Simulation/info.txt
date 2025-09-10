@@ -1,0 +1,7 @@
+To run and reproduce the results, run the .sh files. If dense sweep, or K_d controlled usage:
+
+qsub dense_sweep.sh 500 50 Maze
+
+If sparse sweep the command is simply:
+
+qsub Sparse_sweep.sh

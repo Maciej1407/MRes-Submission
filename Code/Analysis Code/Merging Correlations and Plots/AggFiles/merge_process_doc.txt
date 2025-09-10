@@ -1,0 +1,182 @@
+Merge & Process Outputs — Documentation
+======================================
+
+This note describes the artifacts produced by the intersection-only merge and aggregation
+pipeline for the performance datasets (ExtraSimData + FullSimulationData_PF). It also covers
+the optional per‑D heatmaps. Keep this file alongside your results for quick reference.
+
+Key ideas (applies to all outputs)
+----------------------------------
+• Canonical key: (Diffusion, fR_sorted, sR_sorted), where
+  - fR_sorted = round(min(fR, sR), 12)
+  - sR_sorted = round(max(fR, sR), 12)
+  This collapses symmetric pairs (A,B) ≡ (B,A) into a single canonical coordinate.
+• Intersection-only: the Full dataset is first restricted to the keyset present in Extra,
+  so Full contributes *replicates* but does not add new parameter combinations.
+• Row-wise averages: when aggregating, the mean is taken across all rows (Extra + Full_on_Extra)
+  for each canonical key. No weighting is used (each row counts once).
+
+File: combined_raw_intersection.csv
+-----------------------------------
+Purpose:
+  Union of rows from Extra and Full restricted to Extra’s keyset. It preserves
+  **all original columns** from both sources, and appends a few helper columns.
+
+Row granularity:
+  One row per *input simulation run* (i.e., pre-aggregation). Multiple rows may share
+  the same (Diffusion, fR_sorted, sR_sorted).
+
+Columns (typical; union depends on inputs):
+  • Diffusion                   (float) — as in inputs
+  • fR, sR                      (float) — parsed from 'Params' if not present originally
+  • fR_sorted, sR_sorted        (float) — canonical symmetric keys (see above)
+  • BFS_Composite               (float) — performance metric (if present per-row)
+  • Midpoint_Composite          (float) — performance metric (if present per-row)
+  • Params                      (string) — original parameter string (if present)
+  • source                      (string) — “extra” for ExtraSimData rows, “full” for rows from Full filtered to Extra’s keys
+  • any additional original columns carried through verbatim
+
+Usage notes:
+  • Use this file when you need to re-aggregate with different rules or inspect individual runs.
+  • Multiple rows per key are expected (replicates). Symmetry is already canonicalized
+    via *fR_sorted/sR_sorted*, but the raw fR/sR (unsorted) are preserved for provenance.
+
+
+File: aggregated_intersection.csv
+---------------------------------
+Purpose:
+  One row per canonical key (Diffusion, fR_sorted, sR_sorted), aggregating numeric
+  performance columns by **row-wise mean**.
+
+Row granularity:
+  Exactly one row per canonical key present in Extra.
+
+Columns (exact):
+  • Diffusion            (float)
+  • fR_sorted           (float)
+  • sR_sorted           (float)
+  • BFS                 (float) — mean of BFS_Composite across all rows for the key
+  • Mid                 (float) — mean of Midpoint_Composite across all rows for the key
+  • n_total             (int)   — total #rows contributing to the key (Extra + Full_on_Extra)
+  • n_extra             (int)   — #rows from Extra only
+  • n_full              (int)   — #rows from Full (after intersection filter)
+
+Invariants & checks:
+  • Uniqueness: (Diffusion, fR_sorted, sR_sorted) is unique.
+  • Non-negativity: counts are ≥ 0; n_total = n_extra + n_full.
+  • Coverage: if Full covered all Extra keys, many/most rows will have n_full ≥ 1.
+
+
+File: coverage_summary.csv
+--------------------------
+Purpose:
+  Coverage of Extra’s keyset by the filtered Full dataset.
+
+Columns:
+  • n_keys_extra           (int) — #unique canonical keys in Extra
+  • n_keys_full_on_extra   (int) — #keys from Full that matched Extra (post intersection)
+  • coverage_ratio         (float) — n_keys_full_on_extra / n_keys_extra
+
+Interpretation:
+  • coverage_ratio = 1.0 → Full provides at least one replicate for every Extra key.
+  • < 1.0 → some Extra keys are absent in Full (those keys still aggregate fine using Extra alone).
+
+
+File: symmetric_duplicates_in_full.csv
+--------------------------------------
+Purpose:
+  Transparency report of **pure symmetry duplicates** in the Full dataset — i.e. keys
+  where Full contained both orientations (fR,sR) and (sR,fR). These are canonicalized
+  away in the pipeline but listed here for auditing.
+
+Columns:
+  • Diffusion              (float)
+  • fR_sorted             (float)
+  • sR_sorted             (float)
+  • n_rows                 (int)     — number of raw rows under this canonical key in Full
+  • pairs                  (string)  — JSON-like list of distinct "fR|sR" strings seen
+
+Usage:
+  • Expect n_rows = 2 for a pure symmetric duplicate (one for each orientation).
+  • If n_rows > 2, Full likely contains true replicates in addition to symmetry.
+
+
+File: full_replicate_check.csv
+------------------------------
+Purpose:
+  Counts how many Full rows contribute to each canonical key (after intersection).
+
+Columns:
+  • Diffusion     (float)
+  • fR_sorted    (float)
+  • sR_sorted    (float)
+  • n_full_reps   (int) — number of Full rows at this key that made it into the pool
+
+Interpretation:
+  • If you expect, for example, 1 replicate per key from Full, then n_full_reps should be 1.
+  • If you expect more (e.g., 3), this file lets you verify that expectation quickly.
+
+
+Optional: per‑D heatmaps (PNG + CSV grids)
+------------------------------------------
+Location:
+  • Heatmaps/BFS/*.png and *.csv
+  • Heatmaps/Midpoint/*.png and *.csv
+
+What’s in there:
+  • One PNG and one CSV grid per Diffusion value (panel).
+  • CSV grid: a pivot of the aggregated metric for that D:
+      rows = fR_sorted values, columns = sR_sorted values, values = BFS or Mid
+  • PNG heatmap:
+      – Axes show the actual fR/sR tick values (plain decimal labels).
+      – **Unique‑triangle**: only canonical (min, max) pairs are shown, so figures are not mirror‑symmetric.
+      – Colors share a per‑metric global vmin/vmax so panels are comparable.
+
+Reading heatmaps correctly:
+  • A single square represents the aggregated metric for **one canonical pair** at that D.
+  • The heatmap is *not* symmetric because (A,B) has been merged with (B,A).
+  • If the parameter grid is unevenly spaced, set `uniform_cells=True` in the plotting helper
+    to render equal‑sized cells (aesthetic choice; values are unchanged).
+
+Quality assurance checklist
+---------------------------
+1) Key uniqueness in aggregated_intersection.csv:
+   - No duplicates in (Diffusion, fR_sorted, sR_sorted).
+2) Count identity:
+   - Check n_total == n_extra + n_full for every row.
+3) Coverage sanity:
+   - coverage_ratio in coverage_summary.csv is within [0, 1] and close to your expectation.
+4) Symmetry audit:
+   - symmetric_duplicates_in_full.csv: spot‑check a few entries and confirm pairs list both orientations.
+5) Heatmap CSVs:
+   - Missing cells indicate parameter values absent in the merged set (not an error).
+
+Common pitfalls & how to avoid them
+-----------------------------------
+• Mixing canonical and raw keys:
+  Always join/aggregate on (Diffusion, fR_sorted, sR_sorted). Keep raw fR/sR only for provenance.
+• Double‑counting symmetry:
+  Never aggregate on raw (fR, sR); you’ll double‑weight (A,B) vs (B,A). Use the canonical keys instead.
+• Inconsistent Diffusion naming:
+  The pipeline standardises 'Diffusion' from variants like 'D', 'diffusion_BFS', etc.
+• Averaging mismatched metrics:
+  Ensure BFS_Composite and Midpoint_Composite are the metrics you want in the mean; the pipeline
+  renames them to BFS and Mid in the aggregated output for clarity.
+
+Reproducing the outputs (command line snapshot)
+-----------------------------------------------
+Example (if your script exposes the same flags):
+  python MergeAndProcess.py \
+    --extra ./ExtraSimData.csv \
+    --full  ./FullSimulationData_PF.csv \
+    --outdir ./Intersection_Final \
+    --make-heatmaps
+
+Resulting files in ./Intersection_Final/ :
+  • combined_raw_intersection.csv
+  • aggregated_intersection.csv
+  • coverage_summary.csv
+  • symmetric_duplicates_in_full.csv
+  • full_replicate_check.csv
+  • Heatmaps/BFS/*.png + *.csv
+  • Heatmaps/Midpoint/*.png + *.csv

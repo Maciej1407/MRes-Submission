@@ -1,0 +1,149 @@
+Attractant Balance Outputs — Documentation
+=========================================
+
+This note documents the outputs created by the attractant-only merge (intersection on the CS_* keyset),
+covering both population-level (summary) and subpopulation-level (subpops) artifacts.
+
+Key conventions (applies to all outputs)
+----------------------------------------
+• Canonical key: (Diffusion, fR_sorted, sR_sorted), with
+    - fR_sorted = round(min(fR, sR), 12)
+    - sR_sorted = round(max(fR, sR), 12)
+  This collapses symmetric pairs (A,B) ≡ (B,A).
+• Intersection-only: the non-CS (“Full”) inputs are first restricted to the CS_* keyset, so Full contributes
+  replicates but **does not** add new parameter combinations.
+• Row-wise numeric means: when aggregating, numeric columns are averaged within each canonical key.
+
+Files & purposes
+----------------
+
+1) summary_combined_raw.csv
+   Purpose:
+     Row-wise union of the CS_* summary file and the Full summary file restricted to the CS keyset.
+     Preserves **all original columns** from both sources and adds helper keys.
+   Row granularity:
+     One row per input summary record (pre-aggregation). Multiple rows may share the same key.
+
+   Present columns (example from your file):
+     (none found)
+
+   Notes:
+     • Columns commonly include `Diffusion`, `fR`, `sR`, `fR_sorted`, `sR_sorted`, and attractant timing variables.
+     • In your data, columns named `t25_cons_frac` / `t50_cons_frac` contain **times (steps)** until 25%/50% consumption.
+
+
+2) summary_aggregated_by_key.csv
+   Purpose:
+     One row per (Diffusion, fR_sorted, sR_sorted), aggregating **numeric** summary columns by mean.
+   Row granularity:
+     Exactly one row per canonical key present in the CS summary.
+
+   Present columns (example from your file):
+     (none found)
+
+   Notes:
+     • Expect averaged timing variables (e.g., `t25_cons_frac`, `t50_cons_frac`, and any other numeric columns found).
+     • Non-numeric columns are not aggregated and therefore excluded in this table.
+
+
+3) subpops_combined_raw.csv
+   Purpose:
+     Row-wise union of the CS_* subpops file and the Full subpops file (restricted to the CS keyset).
+     Preserves **all original columns** and adds helper keys.
+   Row granularity:
+     One row per input subpopulation record; multiple rows per key are expected (two subpops per key is typical).
+
+   Present columns (example from your file):
+     (none found)
+
+   Notes:
+     • If a per-subpopulation share/amount column exists (e.g., `sub_share`, `share`, `consumed`, etc.), it is preserved here.
+
+
+4) subpops_aggregated_by_key.csv
+   Purpose:
+     One row per (Diffusion, fR_sorted, sR_sorted) containing **population-level imbalance metrics** derived from subpop shares.
+     If the files already contained metrics (e.g., entropy/HHI/Gini/gap), their numeric means are used per key.
+     Otherwise, they are derived from two-group shares (p, 1−p) using standard formulas:
+       - Entropy (bits):  −∑ p_i log₂ p_i
+       - HHI:              ∑ p_i²
+       - Gini (two groups): |p₁ − p₂|
+       - share_gap:        max(p) − min(p)  (equals Gini for two groups)
+
+   Present columns (example from your file):
+     (none found)
+
+   Notes:
+     • Values are averaged across CS and Full replicates at the same key.
+
+
+5) coverage_summary.csv
+   Purpose:
+     Coverage of CS keyset by the Full side, reported separately for summary and subpops domains.
+   Columns:
+     (none found)
+
+   Interpretation:
+     • n_keys_extra           — number of unique canonical keys in the CS file
+     • n_keys_full_on_extra   — those keys found in the Full file after intersection
+     • coverage_ratio         — fraction of CS keys covered by Full (1.0 means perfect coverage)
+
+
+6) notes.txt
+   Purpose:
+     Free-form “what we did” note saved during the merge. Keep it for provenance.
+
+Construction details
+--------------------
+• Standardisation:
+  - Ensure `Diffusion` exists (renamed from aliases like `D`, `diffusion`, etc.).
+  - Ensure `fR`/`sR` exist; if missing, parse from a `Params` string.
+  - Create canonical keys `fR_sorted`/`sR_sorted`.
+• Intersection:
+  - Build the CS_* keyset (Diffusion, fR_sorted, sR_sorted).
+  - Filter the Full files to this keyset.
+• Append:
+  - Concatenate CS + filtered Full row-wise (preserving all original columns).
+• Aggregation:
+  - For summary: average all **numeric** columns within each canonical key.
+  - For subpops: derive (or average) imbalance metrics, then average across sources within each key.
+
+Quality assurance checklist
+---------------------------
+1) Keys are unique in the aggregated tables:
+   - No duplicates in (Diffusion, fR_sorted, sR_sorted).
+2) Types are sensible:
+   - `Diffusion`, `fR_sorted`, `sR_sorted`, and timing/metric columns are numeric.
+3) Coverage is reasonable:
+   - `coverage_summary.csv` shows ratios in [0, 1] and close to expectations.
+4) Subpop logic:
+   - If subpop shares are present, derived metrics (entropy/HHI/Gini/gap) should be consistent:
+     • entropy ∈ [0, 1] (for two groups), HHI ∈ [0.5, 1], Gini = share_gap ∈ [0, 1].
+5) Provenance:
+   - For any unusual key, consult `summary_combined_raw.csv` / `subpops_combined_raw.csv` to trace inputs.
+
+Field hints (your dataset)
+--------------------------
+• `t25_cons_frac`, `t50_cons_frac` — in your files these are **times (steps)** to 25%/50% consumption.
+• If `t50` is not reached within the analysis window for some runs, that column may be absent or sparser.
+• Subpop files may include a per-subpop share/amount column; where absent, precomputed metrics (entropy/HHI/Gini/gap)
+  are averaged directly per key.
+
+Reproducing the outputs
+-----------------------
+Run the attractant-only merge script you have with the four inputs (two CS_* + two Full files) and an output folder.
+Example (names illustrative):
+  python merge_attractant_only.py \
+    --extra-summary  ./CS_AttractantMetrics_summary_S500C50_Maze_Final.csv \
+    --full-summary   ./AttractantBalanceSummary.csv \
+    --extra-subpops  ./CS_AttractantMetrics_subpops_S500C50_Maze_Final.csv \
+    --full-subpops   ./AttractantBalanceSubpops.csv \
+    --outdir         ./AttrMerge_Only
+
+Outputs in ./AttrMerge_Only/ :
+  - summary_combined_raw.csv
+  - summary_aggregated_by_key.csv
+  - subpops_combined_raw.csv
+  - subpops_aggregated_by_key.csv
+  - coverage_summary.csv
+  - notes.txt

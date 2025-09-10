@@ -1,0 +1,123 @@
+Correlation Outputs (from merged inputs) — Documentation
+=======================================================
+
+This note documents the outputs produced by correlating **performance** against **attractant** metrics
+using the *already-merged* inputs (performance aggregate + attractant summary aggregate, and optionally subpops).
+It also explains the IQR filtering and FDR correction used in the analysis.
+
+Key conventions
+---------------
+• Canonical key: (Diffusion, fR_sorted, sR_sorted), where
+  - fR_sorted = round(min(fR, sR), 12)
+  - sR_sorted = round(max(fR, sR), 12)
+• Join model:
+  - Inner-join performance and attractant **summary** on (Diffusion, fR_sorted, sR_sorted).
+  - Left-join attractant **subpops** (imbalance metrics) onto that, when provided.
+• IQR filter (per D):
+  - Within each diffusion (D), compute Tukey fences independently on fR_sorted and sR_sorted.
+  - Keep rows where both rates fall within [Q1 − 1.5·IQR, Q3 + 1.5·IQR].
+• Multiple testing:
+  - Report Pearson (r, p) and Spearman (ρ, p). Apply **Benjamini–Hochberg FDR** to Spearman p-values **within each D**;
+    the resulting q-values are in the `spearman_q` column.
+
+Files & purposes
+----------------
+
+1) analysis_merged_intersection.csv
+   Purpose:
+     The **joined analysis table** prior to any filtering.
+   Row granularity:
+     One row per canonical key (Diffusion, fR_sorted, sR_sorted) present in BOTH performance and attractant summary.
+   Expected columns (example from your run):
+     Diffusion, fR_sorted, sR_sorted, BFS, Mid, n_total, n_extra, n_full, fR, sR, epoch, M0, A_cons_final, A_secr_final, agrid_final, rate_mean, rate_peak, t_peak_rate, rate_early_mean, rate_mid_mean, rate_late_mean, t10_cons_frac, t25_cons_frac, t50_cons_frac, t75_cons_frac, sub_total_sum, sub_entropy_bits_x, sub_hhi_x, sub_gini_x, residual_mean, residual_std, residual_max_abs, residual_max_abs_rel, sub_entropy_bits_y, sub_hhi_y, sub_gini_y, share_gap
+
+   Notes:
+     • Performance metrics typically include: `BFS` and `Mid` (or `BFS_Composite`/`Midpoint_Composite` mapped to these).
+     • Attractant timing variables typically include: `t25_cons_frac`, `t50_cons_frac` (these are **times/steps** in your data).
+     • If subpops were provided, imbalance metrics may be present: `sub_entropy_bits`, `sub_hhi`, `sub_gini`, `share_gap`.
+
+2) analysis_merged_intersection_IQR.csv
+   Purpose:
+     The same as (1) after **per-D IQR filtering** on `fR_sorted` and `sR_sorted`.
+   Expected columns (same schema as analysis_merged_intersection):
+     Diffusion, fR_sorted, sR_sorted, BFS, Mid, n_total, n_extra, n_full, fR, sR, epoch, M0, A_cons_final, A_secr_final, agrid_final, rate_mean, rate_peak, t_peak_rate, rate_early_mean, rate_mid_mean, rate_late_mean, t10_cons_frac, t25_cons_frac, t50_cons_frac, t75_cons_frac, sub_total_sum, sub_entropy_bits_x, sub_hhi_x, sub_gini_x, residual_mean, residual_std, residual_max_abs, residual_max_abs_rel, sub_entropy_bits_y, sub_hhi_y, sub_gini_y, share_gap
+
+   Notes:
+     • Use this for correlations that are robust to parameter outliers.
+
+3) correlations_by_diffusion_raw.csv
+   Purpose:
+     Per-D **correlation table** using the unfiltered analysis data.
+   Columns:
+     D, perf, attr, N, pearson_r, pearson_p, spearman_rho, spearman_p, spearman_q
+
+   Interpretation:
+     • One row per (D × performance metric × target metric).
+     • `N` is the number of key-pairs contributing to that correlation at D.
+     • Focus on Spearman for monotone trends (ρ, p), with BH–FDR-adjusted `spearman_q`.
+
+4) correlations_by_diffusion_IQR.csv
+   Purpose:
+     Same as (3), but computed on the **IQR-filtered** analysis table.
+   Columns:
+     D, perf, attr, N, pearson_r, pearson_p, spearman_rho, spearman_p, spearman_q
+
+   Interpretation:
+     • Use this table for your primary in-text claims; it downweights extreme parameter points.
+     • Significance threshold commonly set at `spearman_q ≤ 0.05` (per D).
+
+5) perD_sample_sizes.csv
+   Purpose:
+     Sanity-check of sample sizes per D **before** and **after** IQR filtering.
+   Columns:
+     Diffusion, N_all, N_IQR
+
+   Interpretation:
+     • `N_all` = rows in analysis_merged_intersection.csv for that D.
+     • `N_IQR` = rows remaining after the per-D IQR fences.
+     • Large drops suggest either very skewed parameter distributions or many outliers.
+
+How to read correlation signs (your dataset)
+--------------------------------------------
+• In your attractant summary, the columns `t25_cons_frac` and `t50_cons_frac` are **times** (steps) to reach 25%/50% consumption.
+• Therefore, a **negative** correlation between performance (BFS/Mid) and these columns means:
+    earlier depletion (smaller time) ↔ higher performance.
+• For imbalance metrics (e.g., `share_gap`), a **negative** correlation indicates that greater uptake inequality
+  is associated with worse performance.
+
+Quality assurance checklist
+---------------------------
+1) Keys & joins:
+   - Verify that (Diffusion, fR_sorted, sR_sorted) are unique in each analysis file.
+   - Confirm the inner-join only kept rows present in both performance and attractant summary.
+2) IQR filter:
+   - Check perD_sample_sizes.csv to ensure N remains adequate after filtering.
+3) FDR correction:
+   - Within each D, inspect that smaller p-values tend to yield smaller q-values in `spearman_q`.
+4) Direction consistency:
+   - For rows with significant `spearman_q`, Pearson and Spearman signs should generally agree.
+5) Variable meanings:
+   - Ensure that the attractant timing columns are indeed times/steps in your merged inputs.
+
+Reproducing these outputs (from merged inputs)
+----------------------------------------------
+Use the helper script that consumes your **already-merged** CSVs:
+
+  python correlate_from_merged.py \
+    --perf-agg           ./Intersection_Final/intersection_combined_agg.csv \
+    --attr-summary-agg   ./AttrMerge_Only/summary_aggregated_by_key.csv \
+    --attr-subpops-agg   ./AttrMerge_Only/subpops_aggregated_by_key.csv \
+    --outdir             ./AttrPerf_Corrs_FromMerged
+
+It will produce:
+  - analysis_merged_intersection.csv
+  - analysis_merged_intersection_IQR.csv
+  - correlations_by_diffusion_raw.csv
+  - correlations_by_diffusion_IQR.csv
+  - perD_sample_sizes.csv
+
+Tips
+----
+• For figures, consider plotting scatter points with a Pearson fit (green) and a Spearman rank-fit curve (red)
+  for the **most significant** D × metric pairs, annotated with N, r, p, ρ, p, q.
+• When comparing across D, prefer the IQR-filtered correlations to avoid undue influence of outliers.
